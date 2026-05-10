@@ -5,6 +5,7 @@ using PeopleManager.Models;
 using QuestPDF.Fluent;
 using QuestPDF.Helpers;
 using QuestPDF.Infrastructure;
+using System.Text.RegularExpressions;
 
 namespace PeopleManager.Services
 {
@@ -13,48 +14,102 @@ namespace PeopleManager.Services
         private readonly AppDbContext _context;
         private readonly IWebHostEnvironment _env;
 
+        private static readonly Regex EmailRegex = new(
+            @"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$",
+            RegexOptions.Compiled);
+
         public PersonService(AppDbContext context, IWebHostEnvironment env)
         {
             _context = context;
             _env = env;
         }
 
-        public async Task<IEnumerable<PersonResponseDto>> GetAllAsync()
+        public async Task<PagedResponseDto<PersonResponseDto>> GetAllAsync(PersonFilterDto filter)
         {
-            return await _context.People
-                .OrderBy(p => p.FullName)
+            var query = _context.People.AsQueryable();
+
+            if (filter.IsActive.HasValue)
+                query = query.Where(p => p.IsActive == filter.IsActive.Value);
+
+            if (!string.IsNullOrWhiteSpace(filter.SearchTerm))
+            {
+                var term = filter.SearchTerm.ToLower();
+                var hebrewTerm = TranslateKeyboard(term);
+                query = query.Where(p =>
+                    p.FirstName.ToLower().Contains(term) ||
+                    p.LastName.ToLower().Contains(term) ||
+                    p.FirstName.ToLower().Contains(hebrewTerm) ||
+                    p.LastName.ToLower().Contains(hebrewTerm));
+            }
+
+            var totalCount = await query.CountAsync();
+
+            var items = await query
+                .OrderBy(p => p.LastName)
+                .ThenBy(p => p.FirstName)
+                .Skip((filter.Page - 1) * filter.PageSize)
+                .Take(filter.PageSize)
                 .Select(p => ToResponseDto(p))
                 .ToListAsync();
-        }
 
-        public async Task<IEnumerable<PersonResponseDto>> SearchByNameAsync(string name)
+            return new PagedResponseDto<PersonResponseDto>
+            {
+                Items = items,
+                TotalCount = totalCount,
+                Page = filter.Page,
+                PageSize = filter.PageSize
+            };
+        }
+        public async Task<PersonResponseDto?> GetByIdAsync(int id)
         {
+            var person = await _context.People.FindAsync(id);
+            return person == null ? null : ToResponseDto(person);
+        }
+        public async Task<IEnumerable<PersonResponseDto>> SearchByNameAsync(string searchTerm)
+        {
+            var term = searchTerm.ToLower();
+            var hebrewTerm = TranslateKeyboard(term);
+
             return await _context.People
-                .Where(p => p.FullName.Contains(name))
-                .OrderBy(p => p.FullName)
+                .Where(p =>
+                    p.FirstName.ToLower().Contains(term) ||
+                    p.LastName.ToLower().Contains(term) ||
+                    p.FirstName.ToLower().Contains(hebrewTerm) ||
+                    p.LastName.ToLower().Contains(hebrewTerm))
+                .OrderBy(p => p.LastName)
+                .ThenBy(p => p.FirstName)
                 .Select(p => ToResponseDto(p))
                 .ToListAsync();
         }
 
         public async Task<PersonResponseDto> CreateAsync(CreatePersonDto dto, IFormFile? image)
         {
+            if (!EmailRegex.IsMatch(dto.Email))
+                throw new ArgumentException("Invalid email address format");
+
             if (image != null)
             {
                 var allowedExtensions = new[] { ".jpg", ".jpeg", ".png", ".gif" };
                 var extension = Path.GetExtension(image.FileName).ToLowerInvariant();
 
-                if (!allowedExtensions.Contains(extension))
+                if (string.IsNullOrEmpty(extension) || !allowedExtensions.Contains(extension))
                     throw new ArgumentException("Only image files are allowed (.jpg, .jpeg, .png, .gif)");
 
                 if (image.Length > 5 * 1024 * 1024)
                     throw new ArgumentException("Image size cannot exceed 5MB");
+
+                var allowedMimeTypes = new[] { "image/jpeg", "image/png", "image/gif" };
+                if (!allowedMimeTypes.Contains(image.ContentType.ToLower()))
+                    throw new ArgumentException("Invalid image file type");
             }
 
             var person = new Person
             {
-                FullName = dto.FullName,
+                FirstName = dto.FirstName,
+                LastName = dto.LastName,
                 Phone = dto.Phone,
                 Email = dto.Email,
+                IsActive = true,
                 CreatedAt = DateTime.UtcNow
             };
 
@@ -67,10 +122,23 @@ namespace PeopleManager.Services
             return ToResponseDto(person);
         }
 
+        public async Task<PersonResponseDto?> UpdateStatusAsync(int id, bool isActive)
+        {
+            var person = await _context.People.FindAsync(id);
+            if (person == null) return null;
+
+            person.IsActive = isActive;
+            await _context.SaveChangesAsync();
+
+            return ToResponseDto(person);
+        }
+
         public async Task<byte[]> ExportToPdfAsync()
         {
             var people = await _context.People
-                .OrderBy(p => p.FullName)
+                .Where(p => p.IsActive)
+                .OrderBy(p => p.LastName)
+                .ThenBy(p => p.FirstName)
                 .ToListAsync();
 
             QuestPDF.Settings.License = LicenseType.Community;
@@ -95,18 +163,21 @@ namespace PeopleManager.Services
                             columns.RelativeColumn();
                             columns.RelativeColumn();
                             columns.RelativeColumn();
+                            columns.RelativeColumn();
                         });
 
                         table.Header(header =>
                         {
-                            header.Cell().Text("Full Name").Bold();
+                            header.Cell().Text("First Name").Bold();
+                            header.Cell().Text("Last Name").Bold();
                             header.Cell().Text("Phone").Bold();
                             header.Cell().Text("Email").Bold();
                         });
 
                         foreach (var person in people)
                         {
-                            table.Cell().Text(person.FullName);
+                            table.Cell().Text(person.FirstName);
+                            table.Cell().Text(person.LastName);
                             table.Cell().Text(person.Phone);
                             table.Cell().Text(person.Email);
                         }
@@ -119,6 +190,20 @@ namespace PeopleManager.Services
                     });
                 });
             }).GeneratePdf();
+        }
+
+        private static string TranslateKeyboard(string input)
+        {
+            var englishToHebrew = new Dictionary<char, char>
+            {
+                {'a','ש'},{'b','נ'},{'c','ב'},{'d','ג'},{'e','ק'},{'f','כ'},{'g','ע'},
+                {'h','י'},{'i','ן'},{'j','ח'},{'k','ל'},{'l','ך'},{'m','צ'},{'n','מ'},
+                {'o','ם'},{'p','פ'},{'q','/'},{'r','ר'},{'s','ד'},{'t','א'},{'u','ו'},
+                {'v','ה'},{'w','\''},{'x','ס'},{'y','ט'},{'z','ז'}
+            };
+
+            return new string(input.Select(c =>
+                englishToHebrew.TryGetValue(c, out var h) ? h : c).ToArray());
         }
 
         private async Task<string> SaveImageAsync(IFormFile image)
@@ -138,10 +223,12 @@ namespace PeopleManager.Services
         private static PersonResponseDto ToResponseDto(Person p) => new()
         {
             Id = p.Id,
-            FullName = p.FullName,
+            FirstName = p.FirstName,
+            LastName = p.LastName,
             Phone = p.Phone,
             Email = p.Email,
             ImageUrl = p.ImagePath,
+            IsActive = p.IsActive,
             CreatedAt = p.CreatedAt
         };
     }

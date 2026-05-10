@@ -16,19 +16,27 @@ namespace PeopleManager.Controllers
         }
 
         [HttpGet]
-        public async Task<IActionResult> GetAll()
+        public async Task<IActionResult> GetAll([FromQuery] PersonFilterDto filter)
         {
-            var people = await _personService.GetAllAsync();
-            return Ok(people);
+            var result = await _personService.GetAllAsync(filter);
+            return Ok(result);
+        }
+
+        [HttpGet("{id}")]
+        public async Task<IActionResult> GetById(int id)
+        {
+            var result = await _personService.GetByIdAsync(id);
+            if (result == null) return NotFound();
+            return Ok(result);
         }
 
         [HttpGet("search")]
-        public async Task<IActionResult> Search([FromQuery] string name)
+        public async Task<IActionResult> Search([FromQuery] string searchTerm)
         {
-            if (string.IsNullOrWhiteSpace(name))
+            if (string.IsNullOrWhiteSpace(searchTerm))
                 return BadRequest("Search term cannot be empty");
 
-            var results = await _personService.SearchByNameAsync(name);
+            var results = await _personService.SearchByNameAsync(searchTerm);
             return Ok(results);
         }
 
@@ -39,8 +47,23 @@ namespace PeopleManager.Controllers
             if (!ModelState.IsValid)
                 return BadRequest(ModelState);
 
-            var result = await _personService.CreateAsync(dto, image);
-            return CreatedAtAction(nameof(GetAll), new { id = result.Id }, result);
+            try
+            {
+                var result = await _personService.CreateAsync(dto, image);
+                return CreatedAtAction(nameof(GetById), new { id = result.Id }, result);
+            }
+            catch (ArgumentException ex)
+            {
+                return BadRequest(ex.Message);
+            }
+        }
+
+        [HttpPatch("{id}/status")]
+        public async Task<IActionResult> UpdateStatus(int id, [FromBody] UpdateStatusDto dto)
+        {
+            var result = await _personService.UpdateStatusAsync(id, dto.IsActive);
+            if (result == null) return NotFound();
+            return Ok(result);
         }
 
         [HttpGet("export/pdf")]

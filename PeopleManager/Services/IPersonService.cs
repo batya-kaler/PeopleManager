@@ -2,14 +2,13 @@
 
 namespace PeopleManager.Services
 {
-    /// <summary>
-    /// Defines the contract for all person-related business logic operations.
-    /// </summary>
     public interface IPersonService
     {
-        Task<IEnumerable<PersonResponseDto>> GetAllAsync();
-        Task<IEnumerable<PersonResponseDto>> SearchByNameAsync(string name);
+        Task<PagedResponseDto<PersonResponseDto>> GetAllAsync(PersonFilterDto filter);
+        Task<PersonResponseDto?> GetByIdAsync(int id);
+        Task<IEnumerable<PersonResponseDto>> SearchByNameAsync(string searchTerm);
         Task<PersonResponseDto> CreateAsync(CreatePersonDto dto, IFormFile? image);
+        Task<PersonResponseDto?> UpdateStatusAsync(int id, bool isActive);
         Task<byte[]> ExportToPdfAsync();
     }
 }
