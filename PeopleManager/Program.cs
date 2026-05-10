@@ -10,9 +10,18 @@ builder.Services.AddDbContext<AppDbContext>(options =>
 builder.Services.AddScoped<IPersonService, PersonService>();
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
-builder.Services.AddSwaggerGen();
+builder.Services.AddSwaggerGen(c =>
+{
+    c.SwaggerDoc("v1", new()
+    {
+        Title = "PeopleManager API",
+        Version = "v1",
+        Description = "A .NET 10 API for managing people"
+    });
+});
 
 var app = builder.Build();
+QuestPDF.Settings.License = LicenseType.Community;
 
 if (app.Environment.IsDevelopment())
 {

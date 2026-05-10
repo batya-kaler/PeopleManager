@@ -18,6 +18,14 @@ namespace PeopleManager.Services
             @"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$",
             RegexOptions.Compiled);
 
+        private static readonly Dictionary<char, char> EnglishToHebrew = new()
+        {
+            {'a','ש'},{'b','נ'},{'c','ב'},{'d','ג'},{'e','ק'},{'f','כ'},{'g','ע'},
+            {'h','י'},{'i','ן'},{'j','ח'},{'k','ל'},{'l','ך'},{'m','צ'},{'n','מ'},
+            {'o','ם'},{'p','פ'},{'q','/'},{'r','ר'},{'s','ד'},{'t','א'},{'u','ו'},
+            {'v','ה'},{'w','\''},{'x','ס'},{'y','ט'},{'z','ז'}
+        };
+
         public PersonService(AppDbContext context, IWebHostEnvironment env)
         {
             _context = context;
@@ -32,15 +40,7 @@ namespace PeopleManager.Services
                 query = query.Where(p => p.IsActive == filter.IsActive.Value);
 
             if (!string.IsNullOrWhiteSpace(filter.SearchTerm))
-            {
-                var term = filter.SearchTerm.ToLower();
-                var hebrewTerm = TranslateKeyboard(term);
-                query = query.Where(p =>
-                    p.FirstName.ToLower().Contains(term) ||
-                    p.LastName.ToLower().Contains(term) ||
-                    p.FirstName.ToLower().Contains(hebrewTerm) ||
-                    p.LastName.ToLower().Contains(hebrewTerm));
-            }
+                query = ApplySearchFilter(query, filter.SearchTerm);
 
             var totalCount = await query.CountAsync();
 
@@ -60,22 +60,18 @@ namespace PeopleManager.Services
                 PageSize = filter.PageSize
             };
         }
+
         public async Task<PersonResponseDto?> GetByIdAsync(int id)
         {
             var person = await _context.People.FindAsync(id);
             return person == null ? null : ToResponseDto(person);
         }
+
         public async Task<IEnumerable<PersonResponseDto>> SearchByNameAsync(string searchTerm)
         {
-            var term = searchTerm.ToLower();
-            var hebrewTerm = TranslateKeyboard(term);
+            var query = ApplySearchFilter(_context.People.AsQueryable(), searchTerm);
 
-            return await _context.People
-                .Where(p =>
-                    p.FirstName.ToLower().Contains(term) ||
-                    p.LastName.ToLower().Contains(term) ||
-                    p.FirstName.ToLower().Contains(hebrewTerm) ||
-                    p.LastName.ToLower().Contains(hebrewTerm))
+            return await query
                 .OrderBy(p => p.LastName)
                 .ThenBy(p => p.FirstName)
                 .Select(p => ToResponseDto(p))
@@ -141,8 +137,6 @@ namespace PeopleManager.Services
                 .ThenBy(p => p.FirstName)
                 .ToListAsync();
 
-            QuestPDF.Settings.License = LicenseType.Community;
-
             return Document.Create(container =>
             {
                 container.Page(page =>
@@ -192,18 +186,20 @@ namespace PeopleManager.Services
             }).GeneratePdf();
         }
 
+        private static IQueryable<Person> ApplySearchFilter(IQueryable<Person> query, string searchTerm)
+        {
+            var hebrewTerm = TranslateKeyboard(searchTerm.ToLower());
+            return query.Where(p =>
+                EF.Functions.Like(p.FirstName, $"%{searchTerm}%") ||
+                EF.Functions.Like(p.LastName, $"%{searchTerm}%") ||
+                EF.Functions.Like(p.FirstName, $"%{hebrewTerm}%") ||
+                EF.Functions.Like(p.LastName, $"%{hebrewTerm}%"));
+        }
+
         private static string TranslateKeyboard(string input)
         {
-            var englishToHebrew = new Dictionary<char, char>
-            {
-                {'a','ש'},{'b','נ'},{'c','ב'},{'d','ג'},{'e','ק'},{'f','כ'},{'g','ע'},
-                {'h','י'},{'i','ן'},{'j','ח'},{'k','ל'},{'l','ך'},{'m','צ'},{'n','מ'},
-                {'o','ם'},{'p','פ'},{'q','/'},{'r','ר'},{'s','ד'},{'t','א'},{'u','ו'},
-                {'v','ה'},{'w','\''},{'x','ס'},{'y','ט'},{'z','ז'}
-            };
-
             return new string(input.Select(c =>
-                englishToHebrew.TryGetValue(c, out var h) ? h : c).ToArray());
+                EnglishToHebrew.TryGetValue(c, out var h) ? h : c).ToArray());
         }
 
         private async Task<string> SaveImageAsync(IFormFile image)
