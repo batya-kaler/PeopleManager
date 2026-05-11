@@ -40,6 +40,7 @@ namespace PeopleManager.DTOs
         public string? SearchTerm { get; set; }
         public bool? IsActive { get; set; }
         public int Page { get; set; } = 1;
+<<<<<<< HEAD
 
         private int _pageSize = 10;
         public int PageSize
@@ -48,7 +49,16 @@ namespace PeopleManager.DTOs
             set => _pageSize = value > 50 ? 50 : value;
         }
     }
+=======
+>>>>>>> feature/part-b-enhancements
 
+        private int _pageSize = 10;
+        public int PageSize
+        {
+            get => _pageSize;
+            set => _pageSize = value > 50 ? 50 : value;
+        }
+    }
     public class PagedResponseDto<T>
     {
         public IEnumerable<T> Items { get; set; } = new List<T>();

@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using PeopleManager.Data;
 using PeopleManager.Services;
+using QuestPDF.Infrastructure;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -21,6 +22,8 @@ builder.Services.AddSwaggerGen(c =>
 });
 
 var app = builder.Build();
+QuestPDF.Settings.License = LicenseType.Community;
+
 QuestPDF.Settings.License = LicenseType.Community;
 
 if (app.Environment.IsDevelopment())
