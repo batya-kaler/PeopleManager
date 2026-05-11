@@ -5,7 +5,6 @@ using PeopleManager.Models;
 using QuestPDF.Fluent;
 using QuestPDF.Helpers;
 using QuestPDF.Infrastructure;
-using System.Text.RegularExpressions;
 
 namespace PeopleManager.Services
 {
@@ -14,9 +13,16 @@ namespace PeopleManager.Services
         private readonly AppDbContext _context;
         private readonly IWebHostEnvironment _env;
 
-        private static readonly Regex EmailRegex = new(
-            @"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$",
-            RegexOptions.Compiled);
+        private static readonly string[] AllowedExtensions = { ".jpg", ".jpeg", ".png", ".gif" };
+        private static readonly string[] AllowedMimeTypes = { "image/jpeg", "image/png", "image/gif" };
+
+        private static readonly Dictionary<char, char> EnglishToHebrew = new()
+        {
+            {'a','ש'},{'b','נ'},{'c','ב'},{'d','ג'},{'e','ק'},{'f','כ'},{'g','ע'},
+            {'h','י'},{'i','ן'},{'j','ח'},{'k','ל'},{'l','ך'},{'m','צ'},{'n','מ'},
+            {'o','ם'},{'p','פ'},{'q','/'},{'r','ר'},{'s','ד'},{'t','א'},{'u','ו'},
+            {'v','ה'},{'w','\''},{'x','ס'},{'y','ט'},{'z','ז'}
+        };
 
         public PersonService(AppDbContext context, IWebHostEnvironment env)
         {
@@ -26,21 +32,13 @@ namespace PeopleManager.Services
 
         public async Task<PagedResponseDto<PersonResponseDto>> GetAllAsync(PersonFilterDto filter)
         {
-            var query = _context.People.AsQueryable();
+            var query = _context.People.AsNoTracking().AsQueryable();
 
             if (filter.IsActive.HasValue)
                 query = query.Where(p => p.IsActive == filter.IsActive.Value);
 
             if (!string.IsNullOrWhiteSpace(filter.SearchTerm))
-            {
-                var term = filter.SearchTerm.ToLower();
-                var hebrewTerm = TranslateKeyboard(term);
-                query = query.Where(p =>
-                    p.FirstName.ToLower().Contains(term) ||
-                    p.LastName.ToLower().Contains(term) ||
-                    p.FirstName.ToLower().Contains(hebrewTerm) ||
-                    p.LastName.ToLower().Contains(hebrewTerm));
-            }
+                query = ApplySearchFilter(query, filter.SearchTerm);
 
             var totalCount = await query.CountAsync();
 
@@ -60,22 +58,23 @@ namespace PeopleManager.Services
                 PageSize = filter.PageSize
             };
         }
+
         public async Task<PersonResponseDto?> GetByIdAsync(int id)
         {
-            var person = await _context.People.FindAsync(id);
+            var person = await _context.People
+                .AsNoTracking()
+                .FirstOrDefaultAsync(p => p.Id == id);
+
             return person == null ? null : ToResponseDto(person);
         }
+
         public async Task<IEnumerable<PersonResponseDto>> SearchByNameAsync(string searchTerm)
         {
-            var term = searchTerm.ToLower();
-            var hebrewTerm = TranslateKeyboard(term);
+            var query = ApplySearchFilter(
+                _context.People.AsNoTracking().AsQueryable(),
+                searchTerm);
 
-            return await _context.People
-                .Where(p =>
-                    p.FirstName.ToLower().Contains(term) ||
-                    p.LastName.ToLower().Contains(term) ||
-                    p.FirstName.ToLower().Contains(hebrewTerm) ||
-                    p.LastName.ToLower().Contains(hebrewTerm))
+            return await query
                 .OrderBy(p => p.LastName)
                 .ThenBy(p => p.FirstName)
                 .Select(p => ToResponseDto(p))
@@ -84,24 +83,8 @@ namespace PeopleManager.Services
 
         public async Task<PersonResponseDto> CreateAsync(CreatePersonDto dto, IFormFile? image)
         {
-            if (!EmailRegex.IsMatch(dto.Email))
-                throw new ArgumentException("Invalid email address format");
-
             if (image != null)
-            {
-                var allowedExtensions = new[] { ".jpg", ".jpeg", ".png", ".gif" };
-                var extension = Path.GetExtension(image.FileName).ToLowerInvariant();
-
-                if (string.IsNullOrEmpty(extension) || !allowedExtensions.Contains(extension))
-                    throw new ArgumentException("Only image files are allowed (.jpg, .jpeg, .png, .gif)");
-
-                if (image.Length > 5 * 1024 * 1024)
-                    throw new ArgumentException("Image size cannot exceed 5MB");
-
-                var allowedMimeTypes = new[] { "image/jpeg", "image/png", "image/gif" };
-                if (!allowedMimeTypes.Contains(image.ContentType.ToLower()))
-                    throw new ArgumentException("Invalid image file type");
-            }
+                ValidateImage(image);
 
             var person = new Person
             {
@@ -109,8 +92,7 @@ namespace PeopleManager.Services
                 LastName = dto.LastName,
                 Phone = dto.Phone,
                 Email = dto.Email,
-                IsActive = true,
-                CreatedAt = DateTime.UtcNow
+                IsActive = true
             };
 
             if (image != null)
@@ -136,12 +118,11 @@ namespace PeopleManager.Services
         public async Task<byte[]> ExportToPdfAsync()
         {
             var people = await _context.People
+                .AsNoTracking()
                 .Where(p => p.IsActive)
                 .OrderBy(p => p.LastName)
                 .ThenBy(p => p.FirstName)
                 .ToListAsync();
-
-            QuestPDF.Settings.License = LicenseType.Community;
 
             return Document.Create(container =>
             {
@@ -192,18 +173,34 @@ namespace PeopleManager.Services
             }).GeneratePdf();
         }
 
+        private static IQueryable<Person> ApplySearchFilter(IQueryable<Person> query, string searchTerm)
+        {
+            var hebrewTerm = TranslateKeyboard(searchTerm.ToLower());
+            return query.Where(p =>
+                EF.Functions.Like(p.FirstName, $"%{searchTerm}%") ||
+                EF.Functions.Like(p.LastName, $"%{searchTerm}%") ||
+                EF.Functions.Like(p.FirstName, $"%{hebrewTerm}%") ||
+                EF.Functions.Like(p.LastName, $"%{hebrewTerm}%"));
+        }
+
+        private static void ValidateImage(IFormFile image)
+        {
+            var extension = Path.GetExtension(image.FileName).ToLowerInvariant();
+
+            if (string.IsNullOrEmpty(extension) || !AllowedExtensions.Contains(extension))
+                throw new ArgumentException("Only image files are allowed (.jpg, .jpeg, .png, .gif)");
+
+            if (image.Length > 5 * 1024 * 1024)
+                throw new ArgumentException("Image size cannot exceed 5MB");
+
+            if (!AllowedMimeTypes.Contains(image.ContentType.ToLower()))
+                throw new ArgumentException("Invalid image file type");
+        }
+
         private static string TranslateKeyboard(string input)
         {
-            var englishToHebrew = new Dictionary<char, char>
-            {
-                {'a','ש'},{'b','נ'},{'c','ב'},{'d','ג'},{'e','ק'},{'f','כ'},{'g','ע'},
-                {'h','י'},{'i','ן'},{'j','ח'},{'k','ל'},{'l','ך'},{'m','צ'},{'n','מ'},
-                {'o','ם'},{'p','פ'},{'q','/'},{'r','ר'},{'s','ד'},{'t','א'},{'u','ו'},
-                {'v','ה'},{'w','\''},{'x','ס'},{'y','ט'},{'z','ז'}
-            };
-
             return new string(input.Select(c =>
-                englishToHebrew.TryGetValue(c, out var h) ? h : c).ToArray());
+                EnglishToHebrew.TryGetValue(c, out var h) ? h : c).ToArray());
         }
 
         private async Task<string> SaveImageAsync(IFormFile image)
